@@ -2,6 +2,7 @@
 import path from 'node:path';
 import { walkFiles, readText, readJson, exists, httpFetch, compareVersions, pMap } from '../lib/util.mjs';
 import { discoverBlocks } from '../lib/discover.mjs';
+import { vulnTitle, advisoryId } from '../lib/versions.mjs';
 
 const CAT = 'wordpress';
 const ASSET_FIELDS = ['editorScript', 'script', 'viewScript', 'viewScriptModule', 'scriptModule', 'editorStyle', 'style', 'viewStyle', 'render'];
@@ -112,7 +113,7 @@ export default async function wordpress(run) {
         const sevCode = v.impact?.cvss?.severity || '';
         const severity = { c: 'critical', h: 'high', m: 'medium', l: 'low' }[sevCode] || 'high';
         const fixed = v.operator?.max_version && /lt/.test(v.operator?.max_operator || '') ? v.operator.max_version : null;
-        c.finding({ severity, rule: `vuln.${it.type}`, title: `${it.type === 'core' ? 'WordPress core' : `${it.type} ${it.slug}`} ${it.version}: ${v.name || 'known vulnerability'}`, file: it.file, fingerprintExtra: v.uuid || v.name, message: (v.source || []).map((s) => s.id || s.name).filter(Boolean).slice(0, 3).join(', ') || null, references: (v.source || []).map((s) => s.link).filter(Boolean).slice(0, 3), recommendation: fixed ? `Update to ${fixed} or later.` : v.operator?.unfixed === '1' ? 'No fix available — remove or replace this component.' : 'Update to the latest version.' });
+        c.finding({ severity, rule: `vuln.${it.type}`, title: `${it.type === 'core' ? 'WordPress core' : `${it.type} ${it.slug}`} ${it.version}: ${vulnTitle(v)}`, file: it.file, fingerprintExtra: advisoryId(v), message: (v.source || []).map((s) => s.id || s.name).filter(Boolean).slice(0, 3).join(', ') || null, references: (v.source || []).map((s) => s.link).filter(Boolean).slice(0, 3), recommendation: fixed ? `Update to ${fixed} or later.` : v.operator?.unfixed === '1' ? 'No fix available — remove or replace this component.' : 'Update to the latest version.' });
       }
     }, 5);
     c.stats = { components: items.length, lookupFailures: failures };

@@ -95,9 +95,9 @@ describe('LocalWP', () => {
     assert.equal(localWpTools(tempDir()), null);
   });
 
-  test('localSiteInfo finds the real domain in sites.json (al-hadbaa.local, not alhadbaa.local)', () => {
-    const json = { sbHUJ: { name: 'Al-Hadbaa', path: path.join(path.sep, 'Sites', 'al-hadbaa'), domain: 'al-hadbaa.local' } };
-    assert.deepEqual(localSiteInfo(path.join(path.sep, 'Sites', 'al-hadbaa'), json), { id: 'sbHUJ', name: 'Al-Hadbaa', domain: 'al-hadbaa.local' });
+  test('localSiteInfo finds the real domain in sites.json (my-shop.local, not myshop.local)', () => {
+    const json = { sbHUJ: { name: 'My Shop', path: path.join(path.sep, 'Sites', 'my-shop'), domain: 'my-shop.local' } };
+    assert.deepEqual(localSiteInfo(path.join(path.sep, 'Sites', 'my-shop'), json), { id: 'sbHUJ', name: 'My Shop', domain: 'my-shop.local' });
     assert.equal(localSiteInfo(path.join(path.sep, 'Sites', 'other'), json), null);
   });
 });

@@ -1,0 +1,17 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "wpqa-fixture/notice",
+	"title": "WPQA notice",
+	"category": "widgets",
+	"textdomain": "wpqa-fixture-blocks",
+	"attributes": {
+		"message": { "type": "string", "default": "" },
+		"level": { "type": "string", "enum": [ "info", "warning", "error" ], "default": "info" },
+		"count": { "type": "number", "default": 1 },
+		"dismissible": { "type": "boolean", "default": false }
+	},
+	"supports": { "html": false },
+	"editorScript": "file:./index.js",
+	"render": "file:./render.php"
+}

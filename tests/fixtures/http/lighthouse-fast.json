@@ -1,0 +1,31 @@
+{
+ "lighthouseVersion": "13.6.0",
+ "categories": {
+  "performance": {
+   "score": 0.98
+  },
+  "accessibility": {
+   "score": 1
+  },
+  "best-practices": {
+   "score": 1
+  },
+  "seo": {
+   "score": 1
+  }
+ },
+ "audits": {
+  "largest-contentful-paint": {
+   "numericValue": 1100
+  },
+  "cumulative-layout-shift": {
+   "numericValue": 0.01
+  },
+  "total-blocking-time": {
+   "numericValue": 40
+  },
+  "first-contentful-paint": {
+   "numericValue": 900
+  }
+ }
+}

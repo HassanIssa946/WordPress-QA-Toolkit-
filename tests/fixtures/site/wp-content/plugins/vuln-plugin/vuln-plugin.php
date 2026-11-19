@@ -107,8 +107,8 @@ function vf_upload() {
 	move_uploaded_file( $_FILES['f']['tmp_name'], '/tmp/upload' );
 }
 
-// secret.aws-access-key (fake key, not real)
-$vf_aws_key = 'AKIAZQ3N7WPQX5TR2BVM';
+// secret.aws-access-key: the fake key lives in includes/generated-secret.php, written by tests/helpers.mjs
+// (not committed literally, so GitHub secret scanning has nothing to flag)
 ?>
 <!-- wp.csrf.form-no-nonce -->
 <form method="post" action="">

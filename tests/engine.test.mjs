@@ -75,3 +75,17 @@ describe('scope and findings', () => {
     assert.equal(runStamp(new Date(2026, 10, 18, 14, 8, 57)), '20261118-140857');
   });
 });
+
+test('siteReachable: a 5xx home page is not a usable target', async () => {
+  const { makeRun } = await import('./helpers.mjs');
+  const util = await import('../lib/util.mjs');
+  const run = makeRun({ config: { site: { url: 'http://localhost:9' } } });
+  const orig = globalThis.fetch;
+  globalThis.fetch = async () => new Response('Bad Gateway', { status: 502 });
+  try {
+    const r = await run.siteReachable();
+    assert.equal(r.ok, false);
+    assert.match(r.error, /HTTP 502/);
+  } finally { globalThis.fetch = orig; }
+  assert.ok(util.httpFetch);
+});

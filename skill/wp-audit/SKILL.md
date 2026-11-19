@@ -1,7 +1,7 @@
 ---
 name: wp-audit
 description: Audit a WordPress project with the WordPress QA toolkit — code quality, security, plugins/themes/Gutenberg blocks, WP-CLI checks, DNS/TLS/HTTP — then triage, fix approved issues and retest. Use when asked to test, audit, QA or security-check a WordPress site, theme or plugin, or after finishing WordPress code changes.
-argument-hint: "[quick|security|wordpress|code|infrastructure|full|fix <ref>|retest] [--changed] [--approve]"
+argument-hint: "[quick|security|wordpress|code|infrastructure|backend|stack|frontend|performance|seo|scalability|full|fix <ref>|retest] [--changed] [--approve]"
 ---
 
 # WordPress QA audit
@@ -33,24 +33,34 @@ Requested: `$ARGUMENTS` (empty → `quick`)
 | plugins, themes, blocks, updates | `wordpress` |
 | PHP/JS/CSS quality only | `code` |
 | DNS, SSL, headers, redirects | `infrastructure` |
+| REST API, database, cron, PHP errors, PHPUnit | `backend` |
+| versions, updates, end of life, compatibility, upgrade plan | `stack` |
+| browser errors, accessibility, links, visual changes, block editor | `frontend` |
+| speed, Lighthouse, caching, cached nonces | `performance` |
+| SEO basics, sitemaps, noindex, hreflang | `seo` |
+| load test (sandbox, only after a clear yes) | `scalability --profile smoke --approve` |
+| approve new screenshots (after the user reviewed them) | `baselines update --confirm` |
 | before delivery | `full` |
 | retest one fix | the same mode with `--only <check id>` |
 
-Frontend (Playwright/axe), backend/REST, performance (Lighthouse), SEO, load testing (k6) and ZAP
-are **phase 2** — the toolkit reports them as "not tested". Say so; never imply they passed.
+Modes the toolkit does not have yet are reported as "planned — not tested". Say so; never imply they passed.
 
 ## 3. Safety rules (non-negotiable)
 
-- Never add `--approve` on your own. It enables tests that can affect availability or data (load,
-  active scans, write probes). Ask the user in chat, name the exact target host, and wait for a clear yes.
-- Never point intrusive tests at production. Never edit `safety.allowedHosts` or
-  `safety.allowIntrusiveOnProduction` without explicit instruction.
+- Never add `--approve` on your own. It enables tests that write data or load the site (editor drafts,
+  write probes, k6, ZAP). Ask the user in chat, name the exact host and test kinds, and wait for a clear yes.
+  Write `--approve` bare: it takes no value, and unknown flags make the CLI exit 2.
+- Intrusive tests never run against production. The toolkit refuses production by itself; there is no override.
+  Never edit `safety.allowedHosts` without explicit instruction.
+- Never print passwords, cookies or nonces. Sandbox credentials come only from WPQA_WP_USER / WPQA_WP_PASS.
+- Never run `baselines update --confirm` unless the user looked at the screenshots and said yes.
 - Never change DNS, server config, the database, wp-config.php, or delete files without explicit approval.
 - Do not paste secrets found by the scan into chat; refer to them by file and line.
 
 ## 4. Read and triage the report
 
 The command prints the report paths. Read `report.json` (structured) and skim `report.md`.
+Field and mode details: [modes.md](modes.md) (read only when needed).
 
 1. Lead with the verdict (`verdict.status`: PASS, FAIL or INCOMPLETE) and counts, then the critical/high findings using their refs (C1, H2…).
    INCOMPLETE (exit 3) means no blocking findings, but a core check was skipped/errored or coverage is below
@@ -81,9 +91,9 @@ and nothing new appeared. If a check could not run, say the fix is unverified.
 ```
 Verdict: FAIL — 2 critical, 5 high (target: local, coverage 92%)
 Critical
-- C1 REST route alhadbaa/v1/partner accepts writes without permission_callback — functions.php:15 (confirmed)
+- C1 REST route myshop/v1/order accepts writes without permission_callback — functions.php:15 (confirmed)
 High
 - ...
-Not tested: frontend, performance (phase 2); semgrep (not installed)
+Not tested: dast.zap-baseline (Docker not installed); semgrep (not installed)
 Proposed fixes: 1) ... 2) ...  → Which should I apply?
 ```

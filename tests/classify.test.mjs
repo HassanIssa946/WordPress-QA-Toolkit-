@@ -77,3 +77,18 @@ describe('PHPStan symbols', () => {
     assert.deepEqual(projectConstants([fixturePlugin('safe-plugin')], ['node_modules']), ['SF_DIR']);
   });
 });
+
+describe('wpcli.plugins on a site without plugins', () => {
+  test('"Success: Plugin already verified." (exit 0) is verified, not an error', async () => {
+    const { makeRun } = await import('./helpers.mjs');
+    const wpcli = (await import('../modules/wpcli.mjs')).default;
+    const run = makeRun({ config: { scan: { plugins: [] } }, mode: 'wordpress', flags: { only: ['wpcli.plugins'] } });
+    run.wpCli = async () => ({ ok: true, db: true, siteurl: 'http://fixture.local' });
+    run.wp = async (args) => {
+      if (args[0] === 'plugin' && args[1] === 'verify-checksums') return { code: 0, stdout: 'Success: Plugin already verified.\n', stderr: '' };
+      return { code: 0, stdout: '[]', stderr: '' };
+    };
+    await wpcli(run);
+    assert.equal(run.checks.find((c) => c.id === 'wpcli.plugins').status, 'passed');
+  });
+});

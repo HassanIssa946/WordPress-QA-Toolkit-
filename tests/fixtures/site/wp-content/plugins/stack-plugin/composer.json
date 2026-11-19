@@ -1,0 +1,4 @@
+{
+  "name": "wpqa/stack-fixture",
+  "require": { "php": ">=8.4" }
+}

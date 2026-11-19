@@ -1,5 +1,5 @@
 // Network, DNS, TLS and HTTP checks. All passive/read-only (a few GET requests), safe on production.
-import dns from 'node:dns/promises';
+import dnsReal from 'node:dns/promises';
 import tls from 'node:tls';
 import https from 'node:https';
 import http from 'node:http';
@@ -7,11 +7,15 @@ import { httpFetch, followRedirects, joinUrl, isLocalHost, median } from '../lib
 
 const CAT = 'infrastructure';
 
+/** DNS answer: records, [] when the name has no such record (ENODATA / NXDOMAIN), null when the lookup failed. */
 async function resolve(fn, name) {
   try { return await fn(name); } catch (e) { return e.code === 'ENODATA' || e.code === 'ENOTFOUND' ? [] : null; }
 }
 
-function tlsProbe(host, opts = {}) {
+/** Errors that mean "this machine could not resolve the name", not "the server has no HTTPS". */
+export const DNS_ERRORS = new Set(['EAI_AGAIN', 'ENOTFOUND', 'EAI_FAIL', 'EAI_NODATA', 'EAI_NONAME', 'ESERVFAIL', 'ETIMEOUT']);
+
+function tlsProbeReal(host, opts = {}) {
   return new Promise((res) => {
     const sock = tls.connect({ host, port: 443, servername: host, rejectUnauthorized: false, timeout: 15000, ...opts }, () => {
       const cert = sock.getPeerCertificate(true);
@@ -29,7 +33,7 @@ function timing(url) {
     const lib = u.protocol === 'https:' ? https : http;
     const t0 = performance.now();
     const t = {};
-    const req = lib.get(u, { headers: { 'user-agent': 'wpqa-toolkit/1.0' }, timeout: 20000 }, (r) => {
+    const req = lib.get(u, { headers: { 'user-agent': 'wpqa-toolkit/2.0' }, timeout: 20000 }, (r) => {
       r.once('data', () => { t.ttfb = performance.now() - t0; });
       r.on('end', () => { t.total = performance.now() - t0; res({ ok: true, ...t }); });
       r.resume();
@@ -46,6 +50,8 @@ function timing(url) {
 
 export default async function infrastructure(run) {
   const { cfg } = run;
+  const dns = run.dns || dnsReal; // injectable for tests
+  const tlsProbe = run.tlsProbe || tlsProbeReal;
   const publicUrl = cfg.publicSite?.url || (!isLocalHost(new URL(cfg.site.url).hostname) ? cfg.site.url : null);
   const pub = publicUrl ? new URL(publicUrl) : null;
   const apex = pub ? pub.hostname.replace(/^www\./, '') : null;
@@ -54,6 +60,7 @@ export default async function infrastructure(run) {
   await run.check({ id: 'infra.dns', title: 'DNS records (A/AAAA/CNAME/NS/CAA)', category: CAT, tool: 'node:dns' }, async (c) => {
     if (!needPublic(c)) return;
     const hosts = [...new Set([apex, `www.${apex}`])];
+    c.scope(hosts.map((h) => `https://${h}`));
     const rec = {};
     for (const h of hosts) rec[h] = { A: await resolve(dns.resolve4, h), AAAA: await resolve(dns.resolve6, h), CNAME: await resolve(dns.resolveCname, h) };
     if (rec[apex].A === null) return c.skip('DNS lookups failing from this machine', 'Check your internet/DNS connection');
@@ -72,10 +79,15 @@ export default async function infrastructure(run) {
 
   await run.check({ id: 'infra.email-dns', title: 'Email authentication DNS (MX, SPF, DMARC)', category: CAT, tool: 'node:dns' }, async (c) => {
     if (!needPublic(c)) return;
+    // "No SPF/DMARC" is only a finding when DNS demonstrably works: the domain resolves and every lookup answered.
+    const apexA = await resolve(dns.resolve4, apex), apexAAAA = await resolve(dns.resolve6, apex);
+    if (!apexA?.length && !apexAAAA?.length) return c.skip(`DNS lookups failing from this machine (${apex} did not resolve) — SPF/DMARC not tested`, 'Check your internet/DNS connection and rerun.');
     const mx = await resolve(dns.resolveMx, apex);
-    const txt = (await resolve(dns.resolveTxt, apex)) || [];
-    const spf = txt.map((t) => t.join('')).filter((t) => /^v=spf1/i.test(t));
-    const dmarc = ((await resolve(dns.resolveTxt, `_dmarc.${apex}`)) || []).map((t) => t.join('')).filter((t) => /^v=DMARC1/i.test(t));
+    const txtApex = await resolve(dns.resolveTxt, apex);
+    const txtDmarc = await resolve(dns.resolveTxt, `_dmarc.${apex}`);
+    if (mx === null || txtApex === null || txtDmarc === null) return c.skip('DNS lookups failed part-way (no answer for MX/TXT) — SPF/DMARC not tested', 'Check your internet/DNS connection and rerun.');
+    const spf = txtApex.map((t) => t.join('')).filter((t) => /^v=spf1/i.test(t));
+    const dmarc = txtDmarc.map((t) => t.join('')).filter((t) => /^v=DMARC1/i.test(t));
     if (!mx?.length) c.finding({ severity: 'info', rule: 'email.mx', title: 'No MX record (domain receives no email)', recommendation: 'If the contact form sends "from" this domain, still publish SPF/DMARC.' });
     if (!spf.length) c.finding({ severity: 'medium', rule: 'email.spf', title: 'No SPF record', recommendation: `Contact-form emails may land in spam and the domain can be spoofed. Add TXT "v=spf1 include:<your mail provider> -all" (or "v=spf1 -all" if the domain never sends).` });
     if (spf.length > 1) c.finding({ severity: 'high', rule: 'email.spf-multiple', title: 'Multiple SPF records (SPF fails permanently)', evidence: spf.join('\n'), recommendation: 'Merge into one record.' });
@@ -87,8 +99,15 @@ export default async function infrastructure(run) {
   await run.check({ id: 'infra.tls', title: 'TLS certificate, chain and protocols', category: CAT, tool: 'node:tls' }, async (c) => {
     if (!needPublic(c)) return;
     const hosts = [...new Set([pub.hostname, apex, `www.${apex}`])];
+    c.scope(hosts.map((h) => `https://${h}`));
     for (const h of hosts) {
       const p = await tlsProbe(h, { ALPNProtocols: ['h2', 'http/1.1'] });
+      // A name this machine cannot resolve says nothing about HTTPS (missing www records are infra.dns's job).
+      if (!p.ok && DNS_ERRORS.has(p.error)) {
+        if (h === pub.hostname) return c.skip(`could not resolve ${h} from this machine (${p.error}) — TLS not tested`, 'Check your internet/DNS connection and rerun.');
+        c.note(`${h}: not resolvable from this machine (${p.error}) — TLS not tested for this host`);
+        continue;
+      }
       if (!p.ok) { c.finding({ severity: h === pub.hostname ? 'critical' : 'medium', rule: 'tls.connect', title: `HTTPS not available on ${h} (${p.error})`, url: `https://${h}` }); continue; }
       if (!p.authorized) c.finding({ severity: 'critical', rule: 'tls.invalid', title: `Certificate not trusted for ${h}: ${p.authError}`, url: `https://${h}`, recommendation: 'Install a valid certificate covering this hostname with the full intermediate chain.' });
       const days = Math.floor((new Date(p.cert.valid_to) - Date.now()) / 864e5);
@@ -111,6 +130,7 @@ export default async function infrastructure(run) {
     if (!needPublic(c)) return;
     const canonical = `${pub.protocol}//${pub.hostname}/`;
     const variants = [`http://${apex}/`, `http://www.${apex}/`, `https://${apex}/`, `https://www.${apex}/`];
+    c.scope(variants);
     for (const v of variants) {
       const r = await followRedirects(v);
       const final = r.chain[r.chain.length - 1];
@@ -127,6 +147,7 @@ export default async function infrastructure(run) {
   await run.check({ id: 'infra.headers', title: 'Security headers and server information leakage', category: CAT, tool: 'fetch', requires: publicUrl ? {} : { url: true } }, async (c) => {
     const r = await httpFetch(target, { redirect: 'follow', timeoutMs: 20000 });
     if (!r.ok) return c.skip(`could not fetch ${target}: ${r.error}`);
+    c.scope([...new Set([target, r.url])]);
     const h = r.headers;
     const https = r.url.startsWith('https://');
     const hsts = h['strict-transport-security'];
@@ -162,6 +183,7 @@ export default async function infrastructure(run) {
       ['xmlrpc.php', 'medium', (r) => r.status === 405 || /XML-RPC server accepts POST/i.test(r.text), 'xmlrpc.php enabled (brute-force amplification)', "Block it at the server or add_filter( 'xmlrpc_enabled', '__return_false' ) if you don't use Jetpack/apps."],
       ['readme.html', 'low', (r) => r.status === 200 && /WordPress/i.test(r.text), 'readme.html accessible (version fingerprinting)', 'Delete or block it.'],
     ];
+    c.scope([...probes.map(([p]) => joinUrl(base, p)), joinUrl(base, '?author=1')]);
     for (const [p, severity, test, title, recommendation] of probes) {
       const url = joinUrl(base, p);
       const r = await httpFetch(url, { timeoutMs: 15000, maxBody: 64 * 1024 });
@@ -172,6 +194,7 @@ export default async function infrastructure(run) {
   });
 
   await run.check({ id: 'infra.timing', title: 'Network timing (DNS, connect, TLS, TTFB)', category: CAT, tool: 'node:https', requires: publicUrl ? {} : { url: true } }, async (c) => {
+    c.scope([target]);
     const samples = [];
     for (let i = 0; i < 5; i++) { const t = await timing(target); if (t.ok) samples.push(t); }
     if (!samples.length) return c.skip(`could not connect to ${target}`);

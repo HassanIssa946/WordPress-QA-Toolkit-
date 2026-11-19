@@ -1,0 +1,50 @@
+{
+ "lighthouseVersion": "13.6.0",
+ "categories": {
+  "performance": {
+   "score": 0.42
+  },
+  "accessibility": {
+   "score": 1
+  },
+  "best-practices": {
+   "score": 1
+  },
+  "seo": {
+   "score": 1
+  }
+ },
+ "audits": {
+  "largest-contentful-paint": {
+   "numericValue": 6200
+  },
+  "cumulative-layout-shift": {
+   "numericValue": 0.31
+  },
+  "total-blocking-time": {
+   "numericValue": 900
+  },
+  "first-contentful-paint": {
+   "numericValue": 900
+  },
+  "render-blocking-resources": {
+   "id": "render-blocking-resources",
+   "title": "Eliminate render-blocking resources",
+   "score": 0.3,
+   "details": {
+    "type": "opportunity",
+    "overallSavingsMs": 1200
+   }
+  },
+  "unused-javascript": {
+   "id": "unused-javascript",
+   "title": "Reduce unused JavaScript",
+   "score": 0.5,
+   "details": {
+    "type": "opportunity",
+    "overallSavingsMs": 400,
+    "overallSavingsBytes": 204800
+   }
+  }
+ }
+}

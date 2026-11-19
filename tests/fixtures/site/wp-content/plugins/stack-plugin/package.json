@@ -1,0 +1,5 @@
+{
+  "name": "stack-fixture",
+  "private": true,
+  "engines": { "node": ">=99" }
+}

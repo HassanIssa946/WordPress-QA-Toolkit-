@@ -12,24 +12,10 @@ import { writeReport, EXIT_CODES } from '../lib/report.mjs';
 import { MODES, AVAILABLE } from '../lib/modes.mjs';
 import { localSiteDir, localSiteInfo, localWpTools } from '../lib/localwp.mjs';
 import { seedPages } from '../lib/pages.mjs';
+import { parseArgs } from '../lib/cli.mjs';
 
 const VERSION = readJson(path.join(TOOLKIT_ROOT, 'package.json'))?.version || '0.0.0';
 
-function parseArgs(argv) {
-  const flags = { _: [] };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a.startsWith('--')) {
-      const [k, v] = a.slice(2).split('=');
-      const next = argv[i + 1];
-      if (v !== undefined) flags[k] = v;
-      else if (['config', 'url', 'env', 'public', 'only', 'skip', 'project', 'name', 'profile', 'scope'].includes(k) && next && !next.startsWith('--')) { flags[k] = next; i++; }
-      else flags[k] = true;
-    } else flags._.push(a);
-  }
-  for (const k of ['only', 'skip']) if (typeof flags[k] === 'string') flags[k] = flags[k].split(',').map((s) => s.trim()).filter(Boolean);
-  return flags;
-}
 
 const HELP = `WordPress QA Toolkit v${VERSION}
 
@@ -58,13 +44,20 @@ ${Object.entries(MODES).map(([k, m]) => `    ${k.padEnd(15)} ${m.description}`).
 
 Reports
   report                 Print the latest report path and verdict
+  baselines [list|update] [--confirm]
+                         Visual regression: list screenshots of the latest frontend run that differ from the
+                         approved baselines (wpqa-tests/baselines); "update --confirm" approves them. Never automatic.
   modes                  List audit modes
 
 Exit codes: 0 = PASS, 1 = FAIL (findings at/above failOn), 2 = configuration/runtime error,
             3 = INCOMPLETE (no blocking findings, but a core check was skipped/errored or coverage < minCoverage).`;
 
 async function main() {
-  const flags = parseArgs(process.argv.slice(2));
+  const { flags, errors } = parseArgs(process.argv.slice(2));
+  if (errors.length) {
+    console.error(`Invalid arguments:\n- ${errors.join('\n- ')}\n\nRun "node bin/wpqa.mjs help" for the list of flags.`);
+    return EXIT_CODES.ERROR;
+  }
   let [cmd, ...rest] = flags._;
   if (!cmd || cmd === 'help' || flags.help) { console.log(HELP); return 0; }
   if (MODES[cmd]) { rest = [cmd, ...rest]; cmd = 'run'; }
@@ -75,6 +68,7 @@ async function main() {
     case 'install-skill': return cmdInstallSkill(flags);
     case 'run': return cmdRun(rest[0], flags);
     case 'report': return cmdReport(flags);
+    case 'baselines': return cmdBaselines(rest[0] || 'list', flags);
     case 'modes': console.log(Object.entries(MODES).map(([k, m]) => `${k.padEnd(15)} ${m.description}`).join('\n')); return 0;
     case 'version': console.log(VERSION); return 0;
     default: console.error(`Unknown command: ${cmd}\n\n${HELP}`); return 2;
@@ -87,11 +81,12 @@ function getConfig(flags) {
     console.error(`No ${CONFIG_FILE} found from ${process.cwd()}. Run "wpqa init" in your project folder first.`);
     return null;
   }
-  const { cfg, problems } = loadConfig(p);
+  const { cfg, problems, warnings } = loadConfig(p);
   if (problems.length) {
     console.error(`Config problems in ${p}:\n- ${problems.join('\n- ')}`);
     return null;
   }
+  for (const w of warnings) console.error(`Config warning: ${w}`);
   return cfg;
 }
 
@@ -113,8 +108,8 @@ async function cmdRun(mode, flags) {
   for (const id of MODES[mode].modules) {
     if (!AVAILABLE.has(id)) {
       if (flags.only?.length && !audit.selected(`${id}.x`)) continue;
-      audit.checks.push({ id: `${id}.*`, title: `${id} module`, category: id, status: 'skipped', planned: true, reason: 'module planned for phase 2 (not in this version)', howTo: 'Not tested yet — do not treat as passed.', notes: [], artifacts: [], stats: {}, findingCount: 0, durationMs: 0, scope: [] });
-      audit.log(`[SKIP] ${(id + '.*').padEnd(34)} planned for phase 2 — not tested`);
+      audit.checks.push({ id: `${id}.*`, title: `${id} module`, category: id, status: 'skipped', planned: true, reason: 'module planned — not built yet in this version', howTo: 'Not tested yet — do not treat as passed.', notes: [], artifacts: [], stats: {}, findingCount: 0, durationMs: 0, scope: [] });
+      audit.log(`[SKIP] ${(id + '.*').padEnd(34)} planned — not tested`);
       continue;
     }
     const mod = await import(`../modules/${id}.mjs`);
@@ -130,7 +125,10 @@ async function cmdRun(mode, flags) {
   const c = report.verdict.counts;
   audit.log('');
   audit.log(`Findings: ${c.critical} critical, ${c.high} high, ${c.medium} medium, ${c.low} low, ${c.info} info`);
-  if (diff) audit.log(`Since ${diff.previousRunId}: ${diff.new.length} new, ${diff.resolved.length} resolved, ${diff.stillOpen.length} still open, ${diff.notRetested.length} not re-tested`);
+  if (diff?.baselineReset) audit.log(`Since ${diff.previousRunId}: not compared — ${diff.reason}`);
+  else if (diff) audit.log(`Since ${diff.previousRunId}: ${diff.new.length} new, ${diff.resolved.length} resolved, ${diff.stillOpen.length} still open, ${diff.notRetested.length} not re-tested`);
+  const cs = report.coverageSummary;
+  audit.log(`Checks: ${cs.executed}/${cs.applicable} applicable executed (${cs.passed} passed, ${cs.failed} failed, ${cs.skipped} skipped, ${cs.errored} errored, ${cs.notApplicable} n/a) · inspected ${cs.filesInspected} files/folders, ${cs.urlsInspected} URLs`);
   const skipped = report.checks.filter((x) => !x.planned && (x.status === 'skipped' || x.status === 'error')).length;
   const planned = report.checks.filter((x) => x.planned).length;
   if (skipped) audit.log(`${skipped} check(s) skipped/errored — NOT counted as passed (see report).`);
@@ -209,7 +207,9 @@ async function cmdInit(flags) {
     tools,
     code: { phpVersion: `${(d.themes.find((t) => t.likelyCustom)?.requiresPhp || '8.1').replace(/^(\d+\.\d+).*$/, '$1')}-`, phpstanLevel: 5 },
     frontend: { viewports: ['desktop', 'mobile'], visualRegression: true },
-    safety: { allowedHosts: [new URL(guessUrl).hostname], allowIntrusiveOnProduction: false },
+    // Intrusive tests (only with --approve) may target only hosts listed here, and never production.
+    // Left empty on purpose: add a host by hand, and only for a disposable sandbox site.
+    safety: { allowedHosts: [] },
     failOn: 'high',
   };
   fs.writeFileSync(target, JSON.stringify(cfg, null, 2) + '\n');
@@ -220,6 +220,7 @@ async function cmdInit(flags) {
   console.log(`- pages (${seeded.source}): ${pages.join(', ')}`);
   if (localTools) console.log(`- tools: LocalWP PHP ${localTools.php}, WP-CLI and environment taken from app/.envrc`);
   console.log(`- .gitignore: ${gi}`);
+  console.log('- safety.allowedHosts is empty: intrusive tests (--approve) stay off until you add a sandbox host by hand.');
   for (const w of warnings) console.log(`WARNING: ${w}`);
   console.log('Next: node bin/wpqa.mjs doctor, then run "quick" or "full".');
   return 0;
@@ -281,13 +282,26 @@ async function cmdDoctor(flags) {
       const has = which(Array.isArray(tools[name]) ? tools[name][0] : tools[name]);
       res = { ok: Boolean(has), version: has ? 'found' : null };
     }
-    const why = { php: 'php -l, PHPCS, PHPStan', composer: 'installing PHPCS/PHPStan into the toolkit; composer audit is phase 2', wp: 'wpcli.* checks: core/plugin integrity, updates, settings', semgrep: 'security.semgrep (optional)', k6: 'load testing (phase 2, optional)', docker: 'OWASP ZAP scans (phase 2, optional)' }[name];
+    // k6's Windows installer puts it in Program Files; terminals opened before the install don't have it on PATH.
+    const k6Default = 'C:\\Program Files\\k6\\k6.exe';
+    if (name === 'k6' && !res.ok && process.platform === 'win32' && fs.existsSync(k6Default)) res = { ok: true, version: `${k6Default} (not on PATH; used directly)` };
+    const why = { php: 'php -l, PHPCS, PHPStan', composer: 'installing PHPCS/PHPStan into the toolkit; dependencies.composer-audit', wp: 'wpcli.* checks: core/plugin integrity, updates, settings', semgrep: 'security.semgrep (optional)', k6: 'scalability.k6 load tests (approval-gated)', docker: 'dast.zap-* OWASP ZAP scans (approval-gated)' }[name];
     lines.push(`[${ok(res.ok)}] ${name.padEnd(8)} ${res.ok ? res.version : `— ${PLATFORM_HINTS[name] || ''}`}  (${why})`);
     if (res.startupWarnings?.length) {
       lines.push(`[WARN] ${name} prints PHP startup warnings (kept out of results, but fix the environment): ${res.startupWarnings[0].slice(0, 160)}`);
       lines.push('       LocalWP: re-run "init --force", or add Local\'s php …/ImageMagick folder to tools.pathPrepend.');
     }
   }
+  // Browser and Lighthouse (npm packages of the toolkit).
+  for (const [pkg, why] of [['playwright', 'frontend.* (page health, links, visual, e2e, block editor)'], ['@axe-core/playwright', 'frontend.pages accessibility (axe)'], ['lighthouse', 'performance.lighthouse']]) {
+    let v = null;
+    try { v = JSON.parse(fs.readFileSync(path.join(TOOLKIT_ROOT, 'node_modules', ...pkg.split('/'), 'package.json'), 'utf8')).version; } catch { /* missing */ }
+    lines.push(`[${ok(!!v)}] ${pkg.padEnd(8)} ${v || '— npm install ' + pkg + ' (in the toolkit folder)'}  (${why})`);
+  }
+  try {
+    const exe = (await import('playwright')).chromium.executablePath();
+    lines.push(`[${ok(fs.existsSync(exe))}] chromium ${fs.existsSync(exe) ? exe : '— npx playwright install chromium'}  (browser for Playwright and Lighthouse)`);
+  } catch { /* playwright missing: reported above */ }
   if (audit) {
     const w = await audit.wpCli();
     if (w.ok) lines.push(`[${ok(w.db)}] WP-CLI database connection${w.db ? ` (${w.siteurl})` : ` — ${w.dbError || ''} → ${PLATFORM_HINTS.wp}`}`);
@@ -329,6 +343,46 @@ async function cmdInstallSkill(flags) {
   console.log(`Installed /wp-audit skill to ${dest}`);
   console.log(`It runs: node "${home}/bin/wpqa.mjs" <mode>`);
   console.log('Restart Claude Code (or open a new session), then type /wp-audit quick in your WordPress project.');
+  return 0;
+}
+
+/** Latest report folder that has frontend screenshots. */
+function latestScreenshots(cfg) {
+  const root = path.join(cfg._outRoot, 'reports');
+  const runs = fs.existsSync(root) ? fs.readdirSync(root).sort().reverse() : [];
+  for (const r of runs) {
+    const dir = path.join(root, r, 'artifacts', 'visual');
+    if (fs.existsSync(dir)) return { runId: r, dir };
+  }
+  return null;
+}
+
+async function cmdBaselines(sub, flags) {
+  const cfg = getConfig(flags);
+  if (!cfg) return 2;
+  if (!['list', 'update'].includes(sub)) { console.error('Usage: baselines [list|update] [--confirm]'); return 2; }
+  const src = latestScreenshots(cfg);
+  if (!src) { console.log('No screenshots yet. Run the frontend mode first.'); return 0; }
+  const dest = path.join(cfg._root, 'wpqa-tests', 'baselines');
+  const items = [];
+  for (const vp of fs.readdirSync(src.dir)) {
+    const d = path.join(src.dir, vp);
+    if (!fs.statSync(d).isDirectory()) continue;
+    for (const f of fs.readdirSync(d).filter((x) => x.endsWith('.png') && !x.endsWith('.diff.png'))) {
+      const to = path.join(dest, vp, f);
+      const same = fs.existsSync(to) && fs.readFileSync(to).equals(fs.readFileSync(path.join(d, f)));
+      items.push({ from: path.join(d, f), to, label: `${vp}/${f}`, state: !fs.existsSync(to) ? 'new' : same ? 'unchanged' : 'changed' });
+    }
+  }
+  console.log(`Screenshots from run ${src.runId} → ${dest}`);
+  for (const it of items) console.log(`  ${it.state.padEnd(9)} ${it.label}`);
+  const todo = items.filter((it) => it.state !== 'unchanged');
+  if (sub === 'list') return 0;
+  if (!flags.confirm) { console.error(`
+${todo.length} baseline(s) would be written. Review the screenshots, then run: baselines update --confirm`); return 2; }
+  for (const it of todo) { fs.mkdirSync(path.dirname(it.to), { recursive: true }); fs.copyFileSync(it.from, it.to); }
+  console.log(`
+Approved ${todo.length} baseline(s).`);
   return 0;
 }
 

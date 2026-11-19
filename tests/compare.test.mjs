@@ -6,7 +6,7 @@ import path from 'node:path';
 import { diffRuns, findPreviousReport, inScope, findingLocations } from '../lib/report.mjs';
 import { chk, fnd, tempDir } from './helpers.mjs';
 
-const report = (runId, mode, checks, findings) => ({ runId, mode, checks, findings });
+const report = (runId, mode, checks, findings) => ({ schemaVersion: 2, runId, mode, checks, findings });
 
 describe('diffRuns', () => {
   const prev = report('20260101-100000-quick', 'quick', [], [
@@ -29,6 +29,28 @@ describe('diffRuns', () => {
     assert.match(nr.hdr, /check infra\.headers did not run/);
     assert.match(nr.spf, /check infra\.email-dns did not run/);
     assert.deepEqual(d.stillOpen, ['still']);
+  });
+
+  test('"not re-tested" findings are carried until a run re-tests them (resolved / still open, never dropped)', () => {
+    // Run 1: TLS + SPF findings. Run 2: those checks skipped (DNS down) → not re-tested. Run 3: checks ran.
+    const r1 = report('r1', 'full', [chk('infra.tls', 'failed', { scope: ['https://example.com'] }), chk('infra.email-dns', 'failed')], [
+      fnd('tls', 'infra.tls', 'critical', { url: 'https://example.com' }),
+      fnd('spf', 'infra.email-dns', 'medium'),
+    ]);
+    const r2 = report('r2', 'full', [chk('infra.tls', 'skipped'), chk('infra.email-dns', 'skipped')], []);
+    r2.diff = diffRuns(r1, r2);
+    assert.deepEqual(r2.diff.notRetested.map((f) => f.id).sort(), ['spf', 'tls']);
+    // Run 3 still skipped: carried again, not dropped.
+    const r3 = report('r3', 'full', [chk('infra.tls', 'skipped'), chk('infra.email-dns', 'skipped')], []);
+    r3.diff = diffRuns(r2, r3);
+    assert.deepEqual(r3.diff.notRetested.map((f) => f.id).sort(), ['spf', 'tls']);
+    // Run 4: TLS ran and is fine → resolved; SPF still there → still open (not "new").
+    const r4 = report('r4', 'full', [chk('infra.tls', 'passed', { scope: ['https://example.com'] }), chk('infra.email-dns', 'failed')], [fnd('spf', 'infra.email-dns', 'medium')]);
+    const d4 = diffRuns(r3, r4);
+    assert.deepEqual(d4.resolved.map((f) => f.id), ['tls']);
+    assert.deepEqual(d4.stillOpen, ['spf']);
+    assert.deepEqual(d4.new, []);
+    assert.deepEqual(d4.notRetested, []);
   });
 
   test('a skipped or errored check never resolves anything', () => {

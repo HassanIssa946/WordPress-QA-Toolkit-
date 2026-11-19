@@ -64,7 +64,9 @@ export default async function wpcli(run) {
     // Exit 1 + empty stdout + "(… skipped)" = only premium/custom plugins without wordpress.org checksums.
     const ck = await run.wp(['plugin', 'verify-checksums', '--all', '--format=json']);
     const onlySkipped = !ck.stdout.trim() && /Only verified \d+ of \d+ plugins? \((?:0 failed, )?\d+ skipped\)/i.test(ck.stderr);
-    const bad = (ck.code === 0 && !ck.stdout.trim()) || onlySkipped ? [] : json(c, 'wp plugin verify-checksums', ck);
+    // Exit 0 with no output, or exit 0 with only a "Success:" line (e.g. a site with no plugins) = verified.
+    const verifiedOk = ck.code === 0 && (!ck.stdout.trim() || /^Success:/m.test(ck.stdout.trim()) && !/^s*[[{]/.test(ck.stdout.trim()));
+    const bad = verifiedOk || onlySkipped ? [] : json(c, 'wp plugin verify-checksums', ck);
     if (!Array.isArray(bad)) c.toolError('wp plugin verify-checksums', ck, 'did not return a list');
     for (const b of bad.filter((x) => !cfg.scan.plugins.includes(x.plugin_name))) {
       const abs = path.join(pluginsDir, b.plugin_name, b.file);
