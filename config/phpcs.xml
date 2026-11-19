@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<ruleset name="WPQA">
+	<description>WordPress QA toolkit ruleset: WordPress-Extra (includes WordPress-Core + security sniffs), WordPress-Docs off, PHP compatibility.</description>
+
+	<arg name="extensions" value="php"/>
+	<arg name="parallel" value="8"/>
+
+	<exclude-pattern>*/vendor/*</exclude-pattern>
+	<exclude-pattern>*/node_modules/*</exclude-pattern>
+	<exclude-pattern>*/build/*</exclude-pattern>
+	<exclude-pattern>*/dist/*</exclude-pattern>
+	<exclude-pattern>*/tests/*</exclude-pattern>
+	<exclude-pattern>*.asset.php</exclude-pattern>
+
+	<rule ref="WordPress-Extra">
+		<!-- File naming rules are noisy for existing themes and do not affect behaviour. -->
+		<exclude name="WordPress.Files.FileName"/>
+		<!-- Yoda conditions are a style preference. -->
+		<exclude name="WordPress.PHP.YodaConditions"/>
+	</rule>
+
+	<!-- Security sniffs are part of WordPress-Extra; listed explicitly so they are never excluded by accident. -->
+	<rule ref="WordPress.Security.EscapeOutput"/>
+	<rule ref="WordPress.Security.NonceVerification"/>
+	<rule ref="WordPress.Security.ValidatedSanitizedInput"/>
+	<rule ref="WordPress.Security.SafeRedirect"/>
+	<rule ref="WordPress.DB.PreparedSQL"/>
+	<rule ref="WordPress.DB.PreparedSQLPlaceholders"/>
+
+	<rule ref="PHPCompatibilityWP"/>
+</ruleset>

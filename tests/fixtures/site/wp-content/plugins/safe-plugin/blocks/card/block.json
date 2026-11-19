@@ -1,0 +1,9 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "safe-fixture/card",
+	"title": "Card",
+	"textdomain": "safe-plugin",
+	"attributes": { "postId": { "type": "number" } },
+	"render": "file:./render.php"
+}
